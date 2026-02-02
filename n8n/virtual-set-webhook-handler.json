@@ -1,0 +1,217 @@
+{
+  "name": "Virtual Set - Brief Submit Handler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "brief-submit",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-submit",
+      "name": "Webhook - Brief Submit",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "brief-submit"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate unique job ID\nconst jobId = 'job_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);\n\n// Get brief data from webhook\nconst brief = $input.first().json.body;\n\n// Build the job object\nconst job = {\n  jobId: jobId,\n  status: 'queued',\n  progress: 0,\n  stage: 'queued',\n  brief: brief,\n  createdAt: new Date().toISOString(),\n  outputs: null,\n  prompts: null\n};\n\n// Store in workflow static data\nconst staticData = $getWorkflowStaticData('global');\nif (!staticData.jobs) {\n  staticData.jobs = {};\n}\nstaticData.jobs[jobId] = job;\n\nreturn [{ json: { jobId, status: 'queued', message: 'Generation started' } }];"
+      },
+      "id": "code-create-job",
+      "name": "Create Job",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-submit",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "job-status/:jobId",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-status",
+      "name": "Webhook - Job Status",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 520],
+      "webhookId": "job-status"
+    },
+    {
+      "parameters": {
+        "jsCode": "const jobId = $input.first().json.params.jobId;\nconst staticData = $getWorkflowStaticData('global');\n\nif (!staticData.jobs || !staticData.jobs[jobId]) {\n  return [{ json: { error: 'Job not found', jobId } }];\n}\n\nconst job = staticData.jobs[jobId];\n\nreturn [{ json: {\n  jobId: job.jobId,\n  status: job.status,\n  progress: job.progress,\n  stage: job.stage,\n  currentCamera: job.currentCamera || null\n}}];"
+      },
+      "id": "code-get-status",
+      "name": "Get Job Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 520]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-status",
+      "name": "Respond Status",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 520]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "job-result/:jobId",
+        "responseMode": "responseNode",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "webhook-result",
+      "name": "Webhook - Job Result",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 740],
+      "webhookId": "job-result"
+    },
+    {
+      "parameters": {
+        "jsCode": "const jobId = $input.first().json.params.jobId;\nconst staticData = $getWorkflowStaticData('global');\n\nif (!staticData.jobs || !staticData.jobs[jobId]) {\n  return [{ json: { error: 'Job not found', jobId } }];\n}\n\nconst job = staticData.jobs[jobId];\n\nreturn [{ json: {\n  jobId: job.jobId,\n  status: job.status,\n  outputs: job.outputs,\n  prompts: job.prompts\n}}];"
+      },
+      "id": "code-get-result",
+      "name": "Get Job Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 740]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-result",
+      "name": "Respond Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 740]
+    }
+  ],
+  "connections": {
+    "Webhook - Brief Submit": {
+      "main": [
+        [
+          {
+            "node": "Create Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Job": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Job Status": {
+      "main": [
+        [
+          {
+            "node": "Get Job Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Job Status": {
+      "main": [
+        [
+          {
+            "node": "Respond Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook - Job Result": {
+      "main": [
+        [
+          {
+            "node": "Get Job Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Job Result": {
+      "main": [
+        [
+          {
+            "node": "Respond Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
