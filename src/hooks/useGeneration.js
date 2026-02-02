@@ -1,121 +1,158 @@
 // n8n Integration Hook for Virtual Set Preview Generator
-// Sends initData for Telegram validation - secure, no exposed API keys
+// Sends initData for Telegram validation (secure)
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react';
 
-const N8N_WEBHOOK_URL = 'https://meltingprovince.app.n8n.cloud/webhook/brief-submit'
+const N8N_BASE_URL = import.meta.env.VITE_N8N_WEBHOOK_URL || 'https://meltingprovince.app.n8n.cloud/webhook';
 
 /**
- * Submit a brief to n8n with Telegram initData for validation
- * @param {Object} formData - The brief form data
- * @param {string} initData - Telegram initData string (signed by Telegram)
- * @returns {Promise<{jobId: string, status: string}>}
+ * Get Telegram initData for secure requests
  */
-export async function submitBrief(formData, initData) {
-  const response = await fetch(N8N_WEBHOOK_URL, {
+function getInitData() {
+  return window.Telegram?.WebApp?.initData || 'dev_mode';
+}
+
+/**
+ * Get Telegram user ID
+ */
+function getUserId() {
+  return window.Telegram?.WebApp?.initDataUnsafe?.user?.id || 'dev_user';
+}
+
+/**
+ * Submit a brief to n8n for processing
+ */
+export async function submitBrief(formData) {
+  const response = await fetch(`${N8N_BASE_URL}/brief-submit`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      // Telegram auth (validated server-side with bot token)
-      initData: initData,
+      // Telegram auth (n8n validates this)
+      initData: getInitData(),
+      userId: getUserId(),
       
       // Brief data
-      brief: {
-        showType: formData.showTypeCustom || formData.showType,
-        mood: formData.mood,
-        moodNotes: formData.moodNotes,
-        colorPreset: formData.colorPreset,
-        elements: formData.elements,
-        elementNotes: formData.elementNotes,
-        referenceUrls: formData.referenceUrls,
-        additionalNotes: formData.additionalNotes,
-      },
-      
-      // Metadata
-      outputType: 'images',
+      showType: formData.showTypeCustom || formData.showType,
+      mood: formData.mood,
+      moodNotes: formData.moodNotes,
+      colorPreset: formData.colorPreset,
+      elements: formData.elements,
+      elementNotes: formData.elementNotes,
+      referenceUrls: formData.referenceUrls,
+      additionalNotes: formData.additionalNotes,
+      outputType: formData.outputType || 'images',
       timestamp: new Date().toISOString(),
     }),
-  })
+  });
 
   if (!response.ok) {
-    const error = await response.text()
-    throw new Error(error || `Request failed: ${response.status}`)
+    throw new Error(`Failed to submit brief: ${response.statusText}`);
   }
 
-  return response.json()
+  return response.json();
+}
+
+/**
+ * Check the status of a generation job
+ */
+export async function checkJobStatus(jobId) {
+  const response = await fetch(`${N8N_BASE_URL}/job-status/${jobId}?initData=${encodeURIComponent(getInitData())}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to check status: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Get the results of a completed job
+ */
+export async function getJobResults(jobId) {
+  const response = await fetch(`${N8N_BASE_URL}/job-result/${jobId}?initData=${encodeURIComponent(getInitData())}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to get results: ${response.statusText}`);
+  }
+
+  return response.json();
 }
 
 /**
  * React hook for managing generation state
- * @param {string} initData - Telegram initData for auth
  */
-export function useGeneration(initData) {
-  const [jobId, setJobId] = useState(null)
-  const [status, setStatus] = useState(null)
-  const [results, setResults] = useState(null)
-  const [error, setError] = useState(null)
-  const [isLoading, setIsLoading] = useState(false)
+export function useGeneration() {
+  const [jobId, setJobId] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [results, setResults] = useState(null);
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Submit brief and start generation
   const startGeneration = useCallback(async (formData) => {
-    setIsLoading(true)
-    setError(null)
-    setResults(null)
+    setIsLoading(true);
+    setError(null);
+    setResults(null);
     
     try {
-      const response = await submitBrief(formData, initData)
-      setJobId(response.jobId)
-      setStatus({ status: 'processing', progress: 0 })
-      return response
+      const response = await submitBrief(formData);
+      setJobId(response.jobId);
+      setStatus({ status: 'queued', progress: 0 });
+      return response;
     } catch (err) {
-      setError(err.message)
-      throw err
+      setError(err.message);
+      throw err;
     } finally {
-      setIsLoading(false)
+      setIsLoading(false);
     }
-  }, [initData])
+  }, []);
 
-  // Poll for status (simplified - n8n will send results via Telegram bot)
+  // Poll for status updates
   useEffect(() => {
-    if (!jobId || !status) return
-    if (status.status === 'complete' || status.status === 'failed') return
+    if (!jobId) return;
+    if (status?.status === 'complete' || status?.status === 'failed') return;
 
-    // For Telegram Mini App, n8n sends results back via bot message
-    // This polling is optional/backup
-    const checkStatus = async () => {
+    const pollInterval = setInterval(async () => {
       try {
-        const response = await fetch(
-          `https://meltingprovince.app.n8n.cloud/webhook/job-status/${jobId}`,
-          {
-            headers: { 'X-Init-Data': initData }
-          }
-        )
-        if (response.ok) {
-          const data = await response.json()
-          setStatus(data)
-          if (data.status === 'complete') {
-            setResults(data.outputs)
-          }
+        const statusResponse = await checkJobStatus(jobId);
+        setStatus(statusResponse);
+
+        if (statusResponse.status === 'complete') {
+          const resultsResponse = await getJobResults(jobId);
+          setResults(resultsResponse);
+          clearInterval(pollInterval);
+        } else if (statusResponse.status === 'failed') {
+          setError('Generation failed');
+          clearInterval(pollInterval);
         }
       } catch (err) {
-        console.error('Status check failed:', err)
+        console.error('Status poll error:', err);
       }
-    }
+    }, 2000);
 
-    const interval = setInterval(checkStatus, 3000)
-    return () => clearInterval(interval)
-  }, [jobId, status, initData])
+    return () => clearInterval(pollInterval);
+  }, [jobId, status?.status]);
 
   // Reset state
   const reset = useCallback(() => {
-    setJobId(null)
-    setStatus(null)
-    setResults(null)
-    setError(null)
-    setIsLoading(false)
-  }, [])
+    setJobId(null);
+    setStatus(null);
+    setResults(null);
+    setError(null);
+    setIsLoading(false);
+  }, []);
 
   return {
     jobId,
@@ -125,13 +162,13 @@ export function useGeneration(initData) {
     isLoading,
     startGeneration,
     reset,
-    // Computed
+    // Computed values
     progress: status?.progress || 0,
     stage: status?.stage || null,
-    isProcessing: !!jobId && status?.status === 'processing',
+    isProcessing: !!jobId && status?.status !== 'complete' && status?.status !== 'failed',
     isComplete: status?.status === 'complete',
     isFailed: status?.status === 'failed',
-  }
+  };
 }
 
-export default useGeneration
+export default useGeneration;
