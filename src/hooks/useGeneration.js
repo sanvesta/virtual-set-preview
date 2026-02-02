@@ -23,6 +23,7 @@ export async function submitBrief(formData) {
       elementNotes: formData.elementNotes,
       referenceUrls: formData.referenceUrls,
       additionalNotes: formData.additionalNotes,
+      outputType: 'images', // or 'video'
       timestamp: new Date().toISOString(),
     }),
   });
@@ -37,7 +38,7 @@ export async function submitBrief(formData) {
 /**
  * Check the status of a generation job
  * @param {string} jobId - The job ID to check
- * @returns {Promise<{jobId: string, status: string, progress: number, stage: string}>}
+ * @returns {Promise<{jobId: string, status: string, stage: string, progress: number}>}
  */
 export async function checkJobStatus(jobId) {
   const response = await fetch(`${N8N_BASE_URL}/job-status/${jobId}`, {
@@ -48,7 +49,7 @@ export async function checkJobStatus(jobId) {
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to check job status: ${response.statusText}`);
+    throw new Error(`Failed to check status: ${response.statusText}`);
   }
 
   return response.json();
@@ -68,34 +69,7 @@ export async function getJobResults(jobId) {
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to get job results: ${response.statusText}`);
-  }
-
-  return response.json();
-}
-
-/**
- * Submit a revision request
- * @param {string} jobId - The original job ID
- * @param {Object} revision - The revision details
- * @returns {Promise<{jobId: string, status: string}>}
- */
-export async function submitRevision(jobId, revision) {
-  const response = await fetch(`${N8N_BASE_URL}/brief-revision`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      originalJobId: jobId,
-      fixes: revision.fixes,
-      notes: revision.notes,
-      timestamp: new Date().toISOString(),
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to submit revision: ${response.statusText}`);
+    throw new Error(`Failed to get results: ${response.statusText}`);
   }
 
   return response.json();
@@ -111,10 +85,11 @@ export function useGeneration() {
   const [status, setStatus] = useState(null);
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
-  const [isPolling, setIsPolling] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   // Submit brief and start generation
   const startGeneration = useCallback(async (formData) => {
+    setIsLoading(true);
     setError(null);
     setResults(null);
     
@@ -122,17 +97,19 @@ export function useGeneration() {
       const response = await submitBrief(formData);
       setJobId(response.jobId);
       setStatus({ status: 'queued', progress: 0 });
-      setIsPolling(true);
       return response;
     } catch (err) {
       setError(err.message);
       throw err;
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
   // Poll for status updates
   useEffect(() => {
-    if (!jobId || !isPolling) return;
+    if (!jobId) return;
+    if (status?.status === 'complete' || status?.status === 'failed') return;
 
     const pollInterval = setInterval(async () => {
       try {
@@ -140,40 +117,20 @@ export function useGeneration() {
         setStatus(statusResponse);
 
         if (statusResponse.status === 'complete') {
-          setIsPolling(false);
           const resultsResponse = await getJobResults(jobId);
           setResults(resultsResponse);
+          clearInterval(pollInterval);
         } else if (statusResponse.status === 'failed') {
-          setIsPolling(false);
-          setError('Generation failed. Please try again.');
+          setError('Generation failed');
+          clearInterval(pollInterval);
         }
       } catch (err) {
-        console.error('Polling error:', err);
-        // Don't stop polling on transient errors
+        console.error('Status poll error:', err);
       }
     }, 2000); // Poll every 2 seconds
 
     return () => clearInterval(pollInterval);
-  }, [jobId, isPolling]);
-
-  // Submit revision
-  const requestRevision = useCallback(async (revision) => {
-    if (!jobId) return;
-    
-    setError(null);
-    setResults(null);
-    
-    try {
-      const response = await submitRevision(jobId, revision);
-      setJobId(response.jobId);
-      setStatus({ status: 'queued', progress: 0 });
-      setIsPolling(true);
-      return response;
-    } catch (err) {
-      setError(err.message);
-      throw err;
-    }
-  }, [jobId]);
+  }, [jobId, status?.status]);
 
   // Reset state
   const reset = useCallback(() => {
@@ -181,7 +138,7 @@ export function useGeneration() {
     setStatus(null);
     setResults(null);
     setError(null);
-    setIsPolling(false);
+    setIsLoading(false);
   }, []);
 
   return {
@@ -189,10 +146,15 @@ export function useGeneration() {
     status,
     results,
     error,
-    isProcessing: isPolling,
+    isLoading,
     startGeneration,
-    requestRevision,
     reset,
+    // Computed values
+    progress: status?.progress || 0,
+    stage: status?.stage || null,
+    isProcessing: !!jobId && status?.status !== 'complete' && status?.status !== 'failed',
+    isComplete: status?.status === 'complete',
+    isFailed: status?.status === 'failed',
   };
 }
 
